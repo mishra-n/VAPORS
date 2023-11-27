@@ -152,10 +152,19 @@ def plot_model(fig, ax, spectrum, line_list, fit, z, mask=None, vrange=300):
             for voigt in fit:
                 if (voigt.name == 'exponential') or (voigt.name is None):
                     continue
-                if line not in voigt.name:
-                    continue
+
+                voigt_line_name, voigt_line_z = voigt.name.split('__z=')
+                voigt_line_wave = SEARCH_LINES[SEARCH_LINES['tempname']==voigt_line_name]['wave'][0]
+                voigt_line_z = float(voigt_line_z)
+                voigt_line_observed_wave = voigt_line_wave * (1 + voigt_line_z)
+                voigt_line_observed_velocity = to_velocity(voigt_line_observed_wave * u.Angstrom, line_wave, z).to('km/s') 
+                voigt_line_observed_velocity = voigt_line_observed_velocity.value   
+
+                if (voigt_line_observed_velocity < -vrange) or (voigt_line_observed_velocity > vrange):
+                    continue            
+                # if line not in voigt.name:
+                #     continue
                 lsf_voigt = generic_exp(voigt) | fit[index]
-            
                 if str(z) not in voigt.name:
                     ax[i].plot(full_velocity_axis, lsf_voigt(spectrum.spectral_axis.value), '--', color='red', alpha=0.5)
                 else:
@@ -181,8 +190,17 @@ def plot_model(fig, ax, spectrum, line_list, fit, z, mask=None, vrange=300):
             for voigt in fit:
                 if (voigt.name == 'exponential') or (voigt.name is None):
                     continue
-                if line not in voigt.name:
-                    continue
+
+                voigt_line_name, voigt_line_z = voigt.name.split('__z=')
+                voigt_line_wave = SEARCH_LINES[SEARCH_LINES['tempname']==voigt_line_name]['wave'][0]
+                voigt_line_z = float(voigt_line_z)
+                voigt_line_observed_wave = voigt_line_wave * (1 + voigt_line_z)
+                voigt_line_observed_velocity = to_velocity(voigt_line_observed_wave * u.Angstrom, line_wave, z).to('km/s') 
+                voigt_line_observed_velocity = voigt_line_observed_velocity.value   
+
+                if (voigt_line_observed_velocity < -vrange) or (voigt_line_observed_velocity > vrange):
+                    continue   
+
                 lsf_voigt = generic_exp(voigt) | fit[index]
 
                 if str(z) not in voigt.name:
