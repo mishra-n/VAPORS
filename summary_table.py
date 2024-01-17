@@ -4,6 +4,7 @@ from helpers import *  # Importing helper functions from a different module
 from upper_limits import *
 
 constant1 = (np.sqrt(2 * k_B / (m_p * c**2)) * c).to(u.km/u.second / u.Kelvin**(0.5)).value
+multiple = (1e12 / u.cm**2).value / (1e12 / u.cm**2).to(1 / u.micrometer**2).value
 
 def genSummaryTable(spectrum, chain, fit, upper_limits, non_mcmc_upper_limits):
     """
@@ -165,3 +166,128 @@ def genSummaryTable(spectrum, chain, fit, upper_limits, non_mcmc_upper_limits):
     table.sort('absorber_number')
 
     return table
+
+def genSummaryTableNoChain(spectrum, fit, upper_limits, z_main=None):
+
+
+    # Define the column names and data types
+    colnames = ['ion', 'tempname', 'wavelength', 'N', 'Nerr', 'upper_limit', 'v', 'verr', 'b_other', 'berr','T', 'Terr', 'b_tot', 'mass', 'z', 'absorber_number']
+    dtype = [   'U10', 'U10', 'float64', 'float64','float64',   'bool','float64','float64','float64','float64', 'float64','float64', 'float64','float64', 'float64', 'int']
+
+    # Create an empty Astropy table
+    table = Table(names=colnames, dtype=dtype)
+    count = 0
+    for i, param in enumerate(fit.cov_matrix.param_names):
+        if 'N_' not in param:
+            continue
+        model_num = int(param.split('_')[1])
+        name = fit[model_num].name
+
+        temp_name, redshift = name.split('__z=')
+        z = np.round(float(redshift), decimals=4)
+        # if str(z) not in name:
+        #     print('does this ever happen')
+        #     continue
+
+        if np.any(np.array(fit.cov_matrix.param_names) == ('b_other_' + str(int(param.split('_')[1])))):
+            count=i
+
+        ion_name = SEARCH_LINES[SEARCH_LINES['tempname'] == temp_name]['name'][0]
+        wavelength = SEARCH_LINES[SEARCH_LINES['tempname'] == temp_name]['wave'][0]
+
+        N = fit[model_num].N.value
+        b = fit[model_num].b_other.value
+        T = fit[model_num].T.value
+        v = fit[model_num].v.value
+        Nerr = np.sqrt(fit.cov_matrix['N_' + str(model_num), 'N_' + str(model_num)])
+        mass_value = fit[model_num].mass.value
+
+        b_tot = np.sqrt(b**2 + constant1**2 * T / mass_value)
+
+        try:
+            berr = np.sqrt(fit.cov_matrix['b_other_' + str(model_num), 'b_other_' + str(model_num)])
+        except ValueError as e:
+            new_row = (ion_name, temp_name, wavelength, N*multiple, Nerr*multiple, False, v, None, b, None, T, None, b_tot, mass_value, z, 0)
+            table.add_row(new_row)
+            continue
+
+        berr = np.sqrt(fit.cov_matrix['b_other_' + str(model_num), 'b_other_' + str(model_num)])
+        Terr = np.sqrt(fit.cov_matrix['T_' + str(model_num), 'T_' + str(model_num)])
+        verr = np.sqrt(fit.cov_matrix['v_' + str(model_num), 'v_' + str(model_num)])
+        #b_tot_err = np.sqrt((2*b/berr**2)**2 + (constant1*T/mass_value * Terr/T)**2)
+
+        new_row = (ion_name, temp_name, wavelength, N*multiple, Nerr*multiple, False, v, verr, b, berr, T, Terr, b_tot, mass_value, z, 0)
+        table.add_row(new_row)
+
+        absorber_number = 1
+        unique_values = {}
+
+    for i, row in enumerate(table):
+        v = row['v']
+        
+        if v not in unique_values:
+            unique_values[v] = absorber_number
+            absorber_number += 1
+        
+        table['absorber_number'][i] = unique_values[v]
+
+    for i, absorber_num in enumerate(np.unique(table['absorber_number'])):
+        z_UL = table[table['absorber_number'] == absorber_num]['z'].mean()
+        if z_main is not None:
+            if (np.abs(z_main - z_UL) > 0.01):
+                continue
+        for j, line_name in enumerate(upper_limits):
+            if line_name == table[(table['absorber_number'] == absorber_num) * (table['tempname'] == line_name)]['upper_limit'] == False:
+                continue
+            b_tot_UL = table[table['absorber_number'] == absorber_num]['b_tot'].mean()
+            v_UL = table[table['absorber_number'] == absorber_num]['v'].mean()
+            z_UL = table[table['absorber_number'] == absorber_num]['z'].mean()
+            line = SEARCH_LINES[SEARCH_LINES['tempname'] == line_name]
+            wavelength = SEARCH_LINES[SEARCH_LINES['tempname'] == line_name]['wave'][0]
+            if (wavelength * (1+z_UL) > 1795) or (wavelength * (1+z_UL) < 1100):
+                continue
+            Wr, WrErr = calc_Wr(spectrum, line, z_UL, v=v_UL * u.km/u.second, dv=[-b_tot_UL*u.km/u.second, b_tot_UL*u.km/u.second], mask=1.0)
+            AOD, AODErr = calc_AOD(spectrum, line, z_UL, v=v_UL * u.km/u.second, dv=[-b_tot_UL*u.km/u.second, b_tot_UL*u.km/u.second], mask=1.0)
+            N, NErr = AOD_to_N(AOD, AODErr, line)
+            print('upper limit', line_name, N, NErr, v_UL, b_tot_UL)
+            name = SEARCH_LINES[SEARCH_LINES['tempname'] == line_name]['name'][0]
+            wavelength = SEARCH_LINES[SEARCH_LINES['tempname'] == line_name]['wave'][0]
+
+            if (((table['ion'] == name) * (table['absorber_number'] == absorber_num) * (table['upper_limit'] == True)).sum() == 0):# and ((table[table['upper_limit'] == False]['ion'] == name).sum() == 0):
+                new_row = (name, line_name, wavelength, N + 2 * NErr, None, True, v_UL, None, None, None, None, None, b_tot_UL, mass_value, z_UL, absorber_num)
+                table.add_row(new_row)
+
+            else:
+                #if ((((table['ion'] == name) * (table['upper_limit'] == False)).sum() == 0) and ((table['absorber_number'] == absorber_num))):
+                
+                index = np.where((table['ion'] == name) * (table['absorber_number'] == absorber_num) *(table['upper_limit'] == True))
+                compare = table[table['ion'] == name]['N'].mean()
+                if np.log10(2*NErr * u.cm**2) < compare:
+                    new_row = (name, line_name, wavelength, N + 2 * NErr, None, True, v_UL, None, None, None, None, None, b_tot_UL, mass_value, z_UL, absorber_num)
+                    table[index] = (new_row)
+
+    return table
+
+
+def PrintableSummaryTableNoChain(table):
+    # Round each value to 2 decimals
+    rounded_table = Table(table)
+    
+    # Take the logarithm of N
+    rounded_table['N'] = np.log10(rounded_table['N'])
+    
+    # Calculate the asymmetric error using Nerr
+    rounded_table['Nerr_low'] = np.log10(table['N']) - np.log10(table['N'] - table['Nerr'])
+    rounded_table['Nerr_high'] = np.log10(table['N'] + table['Nerr']) - np.log10(table['N'])
+    
+    # Reorder the columns
+    rounded_table = rounded_table[['ion', 'tempname', 'wavelength', 'N', 'Nerr_low', 'Nerr_high', 'upper_limit', 'v', 'verr', 'b_other', 'berr', 'T', 'Terr', 'b_tot', 'mass', 'z', 'absorber_number']]
+    
+    # rounded_table['b_therm'] = np.sqrt(k_B * rounded_table['T'] * u.Kelvin / (rounded_table['mass'] * m_p)).to('km/s').value
+    # rounded_table['b_therm_err'] = np.sqrt(k_B * rounded_table['Terr'] * u.Kelvin / (rounded_table['mass'] * m_p)).to('km/s').value
+    # rounded_table['b_tot'] = np.sqrt(rounded_table['b_other']**2 + rounded_table['b_therm']**2)
+    # rounded_table['btot_err'] = np.sqrt(rounded_table['berr']**2 + rounded_table['b_therm_err']**2)
+    rounded_table.round(decimals=3)
+    #rounded_table = rounded_table[['ion', 'wavelength', 'N', 'Nerr_low', 'Nerr_high', 'upper_limit', 'v', 'verr', 'b_tot', 'btot_err', 'z', 'absorber_number']]
+
+    return rounded_table

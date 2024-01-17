@@ -212,7 +212,7 @@ def plot_model(fig, ax, spectrum, line_list, fit, z, mask=None, vrange=300):
             ax.set_xlim(-vrange,vrange)
             ax.set_ylim(0, 1.5)
 
-def plotter(spectrum, line_list, fit, z, mask=None, vrange=300, n=1, save=True, title=None, name=None, gray_out=None):
+def plotter(spectrum, line_list, fit, z, mask=None, vrange=300, n=1, save=True, title=None, name=None, gray_out=None, fig_return=False):
     """
     Plot the absorber features and the fitted model.
 
@@ -244,6 +244,9 @@ def plotter(spectrum, line_list, fit, z, mask=None, vrange=300, n=1, save=True, 
             plt.savefig(str(name) + '_absorber_plot.pdf', dpi=300, bbox_inches='tight')
     else:
         plt.show()
+
+    if fig_return==True:
+        return fig, ax
 
 
 def plotViolin(output_Ns, ions, subtable):
