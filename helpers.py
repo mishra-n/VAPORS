@@ -157,3 +157,6 @@ def check_values_in_arrays(A, B):
           #      bool_result.append(False)
     
     return index_result
+
+def ReLU(x):
+    return x * (x > 0)
