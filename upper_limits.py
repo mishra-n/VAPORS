@@ -55,5 +55,11 @@ def AOD_to_N(AOD, AODErr, line):
 
     return N.to(u.cm**(-2)), NErr.to(u.cm**(-2))
 
+def Wr_to_N(Wr, WrErr, line):
+    N = m_e * c**2 / np.pi / e.gauss**2 / line['f'][0] / (line['wave'][0] * u.Angstrom)**2 * Wr
+    NErr = m_e * c**2 / np.pi / e.gauss**2 / line['f'][0] / (line['wave'][0] * u.Angstrom)**2 * WrErr
+    
+    return N.to(u.cm**(-2)), NErr.to(u.cm**(-2))
+
 
 

@@ -54,6 +54,8 @@ def genLineTable():
    LyX = getfeature('HI', 'LyX', 915.824)
    LyO = getfeature('HI', 'LyO', 915.329)
 
+   HeI_1 = getfeature('HeI', 'HeI', 584.3)
+
 
    OI_1 = getfeature('OI', 'OI_1', 936.63)
    OI_2 = getfeature('OI', 'OI_2', 921.86)
@@ -73,9 +75,17 @@ def genLineTable():
 
    CII_1 = getfeature('CII', 'CII_1', 1334.532)
    CII_2 = getfeature('CII', 'CII_2', 1036.3367)
+   CII_3 = getfeature('CII', 'CII_3', 903.666)
+   CII_4 = getfeature('CII', 'CII_4', 904.00)
+
    CIII = getfeature('CIII', 'CIII', 977.030)
    CIV_1 = getfeature('CIV', 'CIV_1', 1548.187)
    CIV_2 = getfeature('CIV', 'CIV_2', 1550.772)
+
+   SII_1 = getfeature('SII', 'SII_1', 763.7)
+   SII_2 = getfeature('SII', 'SII_2', 765.1)
+
+   SIII = getfeature('SIII', 'SIII', 724.3)
 
    SiII_7 = getfeature('SiII', 'SiII_7', 1526.70698)
    SiII_6 = getfeature('SiII', 'SiII_6', 1304.3702)
@@ -96,15 +106,24 @@ def genLineTable():
    NV_1 = getfeature('NV', 'NV_1', 1238.821)
    NV_2 = getfeature('NV', 'NV_2', 1242.804)
 
+   NIV_1 = getfeature('NIV', 'NIV', 765.148)
+
    NeVIII_1 = getfeature('NeVIII', 'NeVIII_1', 770.409)
    NeVIII_2 = getfeature('NeVIII', 'NeVIII_2', 780.324)
 
+   PII = getfeature('PII', 'PII_1', 1152.818)
+   FeIII = getfeature('FeIII', 'FeIII', 1122.524)
+
 
    SEARCH_LINES = vstack([LyA, LyB, LyD, LyG, LyE, LyZ, LyH, LyT, LyI, LyK, LyL, LyM, LyN, LyX, LyO,
+                           HeI_1,
                            OI_1, OI_2, OII_1, OII_2, OII_3, OIII_1, OIII_2, OIV_1, OIV_2, OVI_1, OVI_2, 
-                           CII_1, CII_2, CIII, CIV_1, CIV_2, 
+                           CII_1, CII_2, CII_3, CII_4, CIII, CIV_1, CIV_2, 
+                           SII_1, SII_2, SIII,
                            SiII_1, SiII_2, SiII_3, SiII_4, SiII_5, SiII_6, SiII_7, SiIII, SiIV_1, SiIV_2,
-                           NIII, NV_1, NV_2, NeVIII_1, NeVIII_2])
+                           NIII, NIV_1, NV_1, NV_2, NeVIII_1, NeVIII_2,
+                           PII,
+                           FeIII])
    SEARCH_LINES['wave'] = SEARCH_LINES['wave'].astype(u.Quantity) #* u.Angstrom
    SEARCH_LINES['Gamma'] = SEARCH_LINES['Gamma'].astype(u.Quantity) #* u.Hz
    SEARCH_LINES['Gamma_wavelength'] = SEARCH_LINES['Gamma'].astype(u.Quantity) #* u.Hz
