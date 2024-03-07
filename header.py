@@ -34,7 +34,7 @@ import matplotlib as mpl
 from astropy.table import Table, QTable, vstack
 import corner
 import mpdaf
-from astropy.constants import c, m_e, e, k_B, m_p
+from astropy.constants import c, m_e, e, k_B, m_p, G
 from specutils.spectra import Spectrum1D
 from specutils.fitting import fit_lines
 from specutils.fitting import fit_generic_continuum
