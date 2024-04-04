@@ -1,5 +1,6 @@
 from header import *
 from helpers import *
+from line_info import *
 
 def genSamples(fit, num):
     """
@@ -42,3 +43,44 @@ def genSamples(fit, num):
         samples[indices_to_replace, i] = new_params
 
     return samples
+
+def getMCMCParamNames(complete_fit):
+    """
+    Get parameter names for MCMC fitting.
+    
+    Parameters:
+    - complete_fit (FittedModel): Fitted model.
+    
+    Returns:
+    - mcmc_params (list): List of parameter names for MCMC fitting.
+    """
+    mcmc_params = []
+    for i,voigt1d in enumerate(complete_fit):
+        if voigt1d.name is None:
+            continue
+        if 'z=' not in voigt1d.name:
+            continue
+        full_name = voigt1d.name
+        temp_name, redshift = full_name.split('__z=')
+        line = SEARCH_LINES[SEARCH_LINES['tempname'] == temp_name]
+        for name, value in zip(voigt1d.param_names, voigt1d.parameters):
+            tied = voigt1d.tied[name]
+            fixed = voigt1d.fixed[name]
+            if (tied == False) and (fixed == False):
+                adding_name = line['name'][0] + '_z=' + str(np.round(float(redshift), decimals=4)) + '_' + name
+                if (adding_name + '_0') not in mcmc_params:
+                    mcmc_params.append(adding_name + '_0')
+                else:
+                    counter = 1
+                    while (adding_name + '_' + str(counter)) in mcmc_params:
+                        print(counter)
+                        counter += 1
+                    mcmc_params.append(adding_name + '_' + str(counter))
+
+                # mcmc_params.append(line['name'][0] + '_z=' + str(np.round(float(redshift), decimals=4)) + '_' + name)
+
+    return np.array(mcmc_params)
+
+# def getMCMC_error_N(name, z, v):
+
+
