@@ -51,6 +51,7 @@ from astropy.modeling.fitting import (SplineInterpolateFitter,
 from astropy.cosmology import FlatLambdaCDM
 from mendeleev import element
 import os
+import re
 from roman import toRoman, fromRoman
 import astropy.io.ascii as ascii
 from scipy.optimize import minimize
