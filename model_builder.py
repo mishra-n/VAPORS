@@ -243,6 +243,18 @@ def model_1A(params, bounds, info_dict):
                 vn_init.b_other_11.tied = make_tie_b()
             if i == 12:
                 vn_init.b_other_12.tied = make_tie_b()
+            if i == 13:
+                vn_init.b_other_13.tied = make_tie_b()
+            if i == 14:
+                vn_init.b_other_14.tied = make_tie_b()
+            if i == 15:
+                vn_init.b_other_15.tied = make_tie_b()
+            if i == 16:
+                vn_init.b_other_16.tied = make_tie_b()
+            if i == 17:
+                vn_init.b_other_17.tied = make_tie_b()
+            if i == 18:
+                vn_init.b_other_18.tied = make_tie_b()
     if tied_T:
         # Tie temperature (T) for components with the same redshift
         for i, line in enumerate(lines):
@@ -267,9 +279,21 @@ def model_1A(params, bounds, info_dict):
             if i == 10:
                 vn_init.T_10.tied = make_tie_T()
             if i == 11:
-                vn_init.T_11.tied = make_tie_b()
+                vn_init.T_11.tied = make_tie_T()
             if i == 12:
-                vn_init.T_12.tied = make_tie_b()
+                vn_init.T_12.tied = make_tie_T()
+            if i == 13:
+                vn_init.T_13.tied = make_tie_T()
+            if i == 14:
+                vn_init.T_14.tied = make_tie_T()
+            if i == 15:
+                vn_init.T_15.tied = make_tie_T()
+            if i == 16:
+                vn_init.T_16.tied = make_tie_T()
+            if i == 17:
+                vn_init.T_17.tied = make_tie_T()
+            if i == 18:
+                vn_init.T_18.tied = make_tie_T()
 
     if tied_v:
         # Tie velocity (v) for components with the same redshift
@@ -298,6 +322,18 @@ def model_1A(params, bounds, info_dict):
                 vn_init.v_11.tied = make_tie_v()
             if i == 12:
                 vn_init.v_12.tied = make_tie_v()
+            if i == 13:
+                vn_init.v_13.tied = make_tie_v()
+            if i == 14:
+                vn_init.v_14.tied = make_tie_v()
+            if i == 15:
+                vn_init.v_15.tied = make_tie_v()
+            if i == 16:
+                vn_init.v_16.tied = make_tie_v()
+            if i == 17:
+                vn_init.v_17.tied = make_tie_v()
+            if i == 18:
+                vn_init.v_18.tied = make_tie_v()
 
     return vn_init
 
