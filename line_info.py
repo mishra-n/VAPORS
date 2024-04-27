@@ -101,6 +101,8 @@ def genLineTable():
    SiIV_2 = getfeature('SiIV', 'SiIV_2', 1402.77291)
 
    #SiII_4, SiII_1,  SiIII 
+   NI_1 = getfeature('NI', 'NI_1', 1200.223)
+   NI_2 = getfeature('NI', 'NI_2', 1200.7)
 
    NIII = getfeature('NIII', 'NIII', 989.799)
    NV_1 = getfeature('NV', 'NV_1', 1238.821)
@@ -121,7 +123,7 @@ def genLineTable():
                            CII_1, CII_2, CII_3, CII_4, CIII, CIV_1, CIV_2, 
                            SII_1, SII_2, SIII,
                            SiII_1, SiII_2, SiII_3, SiII_4, SiII_5, SiII_6, SiII_7, SiIII, SiIV_1, SiIV_2,
-                           NIII, NIV_1, NV_1, NV_2, NeVIII_1, NeVIII_2,
+                           NI_1, NI_2, NIII, NIV_1, NV_1, NV_2, NeVIII_1, NeVIII_2,
                            PII,
                            FeIII])
    SEARCH_LINES['wave'] = SEARCH_LINES['wave'].astype(u.Quantity) #* u.Angstrom
