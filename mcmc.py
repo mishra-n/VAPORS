@@ -54,7 +54,9 @@ def getMCMCParamNames(complete_fit):
     Returns:
     - mcmc_params (list): List of parameter names for MCMC fitting.
     """
-    mcmc_params = []
+    param_names = []
+    v_temp = 99999
+    absorber_num = 0
     for i,voigt1d in enumerate(complete_fit):
         if voigt1d.name is None:
             continue
@@ -67,20 +69,18 @@ def getMCMCParamNames(complete_fit):
             tied = voigt1d.tied[name]
             fixed = voigt1d.fixed[name]
             if (tied == False) and (fixed == False):
-                adding_name = line['name'][0] + '_z=' + str(np.round(float(redshift), decimals=4)) + '_' + name
-                if (adding_name + '_0') not in mcmc_params:
-                    mcmc_params.append(adding_name + '_0')
+                if v_temp == 99999:
+                    # print(line['name'][0] + '_z=' + str(np.round(float(redshift), decimals=4)) + '_' + name + '_' + str(absorber_num))
+                    param_names.append(line['name'][0] + '_z=' + str(np.round(float(redshift), decimals=4)) + '_' + name + '_' + str(absorber_num))
+                    v_temp = voigt1d.v.value
                 else:
-                    counter = 1
-                    while (adding_name + '_' + str(counter)) in mcmc_params:
-                        print(counter)
-                        counter += 1
-                    mcmc_params.append(adding_name + '_' + str(counter))
-
-                # mcmc_params.append(line['name'][0] + '_z=' + str(np.round(float(redshift), decimals=4)) + '_' + name)
-
-    return np.array(mcmc_params)
-
+                    if voigt1d.v.value != v_temp:
+                        absorber_num += 1
+                        v_temp = voigt1d.v.value
+                    # print(line['name'][0] + '_z=' + str(np.round(float(redshift), decimals=4)) + '_' + name + '_' + str(absorber_num))
+                    param_names.append(line['name'][0] + '_z=' + str(np.round(float(redshift), decimals=4)) + '_' + name + '_' + str(absorber_num))
+    return np.array(param_names)
+                
 # def getMCMC_error_N(name, z, v):
 
 
