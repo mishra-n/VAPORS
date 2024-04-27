@@ -92,6 +92,22 @@ def to_velocity(wave, line, z):
     v = c * (true - observed) / true  # Calculate velocity using the speed of light constant
     return v
 
+def to_wavelength(v, line, z):
+    """
+    Calculate the observed wavelength based on velocity and true wavelength.
+
+    Parameters:
+    - v (float): The velocity.
+    - line (float): The true wavelength.
+    - z (float): The redshift.
+
+    Returns:
+    - wave (float): The calculated observed wavelength.
+    """
+    wave = line * u.Angstrom * (1 + z)
+    observed = wave - (v * wave / c)  # Calculate observed wavelength using the speed of light constant
+    return observed
+
 def log_uniform(a, b, size):
     """
     Generate an array of size random numbers uniformly distributed in log space between a and b.
