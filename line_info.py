@@ -7,7 +7,7 @@ def getfeature(name='HI', tempname='LyA', wave=1215.6701):
    features = Table(np.load(filename))
    features['wave'] = features['wave']
    features['tempname'] = tempname
-
+   
    # Get features with this ion                          
    index = np.where(features['name'] == name)
    features = features[index]
@@ -108,7 +108,8 @@ def genLineTable():
    NV_1 = getfeature('NV', 'NV_1', 1238.821)
    NV_2 = getfeature('NV', 'NV_2', 1242.804)
 
-   NIV_1 = getfeature('NIV', 'NIV', 765.148)
+   NIV_1 = getfeature('NIV', 'NIV_1', 765.148)
+   NIV_2 = getfeature('NIV', 'NIV_2', 569.045)
 
    NeVIII_1 = getfeature('NeVIII', 'NeVIII_1', 770.409)
    NeVIII_2 = getfeature('NeVIII', 'NeVIII_2', 780.324)
@@ -123,7 +124,7 @@ def genLineTable():
                            CII_1, CII_2, CII_3, CII_4, CIII, CIV_1, CIV_2, 
                            SII_1, SII_2, SIII,
                            SiII_1, SiII_2, SiII_3, SiII_4, SiII_5, SiII_6, SiII_7, SiIII, SiIV_1, SiIV_2,
-                           NI_1, NI_2, NIII, NIV_1, NV_1, NV_2, NeVIII_1, NeVIII_2,
+                           NI_1, NI_2, NIII, NIV_1, NIV_2, NV_1, NV_2, NeVIII_1, NeVIII_2,
                            PII,
                            FeIII])
    SEARCH_LINES['wave'] = SEARCH_LINES['wave'].astype(u.Quantity) #* u.Angstrom
