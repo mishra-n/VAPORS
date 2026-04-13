@@ -80,6 +80,7 @@ CLOUDY_AXIS_COLUMNS: Tuple[str, ...] = (
     "N_H",
     "NHI",
     "T",
+    "T_init",
     "C_O",
     "N_O",
     "Fe_O",
@@ -151,6 +152,7 @@ CORNER_LABEL_OVERRIDES = {
     "N_H": "log N_H (total)",
     "NHI": "log N_HI (neutral)",
     "T": "log T",
+    "T_init": "log T_init (K)",
 }
 
 
@@ -510,11 +512,13 @@ class CloudyGridInterpolator:
         values: np.ndarray,
         ion_order: Tuple[str, ...],
         axis_names: Tuple[str, ...] = CLOUDY_AXIS_COLUMNS,
+        is_td_grid: bool = False,
     ) -> None:
         self.points = tuple(np.asarray(p, dtype=float) for p in points)
         self.values = np.asarray(values, dtype=float)
         self.ion_order = ion_order
         self.axis_names = axis_names
+        self.is_td_grid = is_td_grid
         self.interpolator = RegularGridInterpolator(
             self.points,
             self.values,
@@ -586,6 +590,173 @@ class CloudyGridInterpolator:
     ) -> "CloudyGridInterpolator":
         table = Table.read(path)
         return cls.from_table(table, ion_columns=ion_columns)
+
+    @classmethod
+    def from_td_table(
+        cls,
+        table: Table,
+        ion_columns: Optional[Sequence[str]] = None,
+        temperature_step: float = 0.05,
+    ) -> "CloudyGridInterpolator":
+        """Build an interpolator from a raw time-dependent assembled grid.
+
+        The input *table* has irregular time-step rows per grid point with
+        columns ``z, Z, n_H, T_init, time_elapsed, temperature, [ions], N_H_total``.
+        Ion values are raw single-zone column densities (linear).
+
+        This method:
+        1. Groups rows by outer grid axes ``(z, Z, n_H, T_init)``
+        2. Converts ``temperature`` (Kelvin) to ``log10(T)``
+        3. Computes ion fractions: ``log10(N_ion / N_H_total)``
+        4. Resamples each group onto a common regular ``T`` axis
+        5. Returns a ``CloudyGridInterpolator`` with ``is_td_grid=True``
+
+        Parameters
+        ----------
+        temperature_step : float
+            Spacing of the regular log10(T) axis in dex (default 0.05).
+        """
+        table = table.copy()
+
+        _TD_OUTER_AXES = ("z", "Z", "n_H", "T_init")
+        outer_axes = tuple(col for col in _TD_OUTER_AXES if col in table.colnames)
+
+        if "temperature" not in table.colnames:
+            raise ValueError("TD table must contain a 'temperature' column (linear Kelvin)")
+        if "N_H_total" not in table.colnames:
+            raise ValueError("TD table must contain an 'N_H_total' column")
+
+        raw_temp = np.asarray(table["temperature"], dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            log_temp = np.log10(raw_temp)
+
+        if ion_columns is None:
+            ion_columns = [
+                col for col in table.colnames
+                if col.startswith("N_") and col != "N_H_total"
+            ]
+        ion_order = tuple(ion_columns)
+
+        # --- Build regular T axis ---
+        finite_mask = np.isfinite(log_temp) & (raw_temp > 0)
+        if not np.any(finite_mask):
+            raise ValueError("No finite temperature values in TD table")
+        global_min = np.floor(np.min(log_temp[finite_mask]) / temperature_step) * temperature_step
+        global_max = np.ceil(np.max(log_temp[finite_mask]) / temperature_step) * temperature_step
+        t_axis = np.round(np.arange(global_min, global_max + 0.5 * temperature_step, temperature_step), decimals=6)
+        n_t = len(t_axis)
+
+        # --- Identify unique outer-axis combos ---
+        outer_unique_vals = [np.unique(np.asarray(table[col], dtype=float)) for col in outer_axes]
+        outer_shape = tuple(len(u) for u in outer_unique_vals)
+        full_shape = outer_shape + (n_t, len(ion_order))
+        cube = np.full(full_shape, np.nan, dtype=float)
+
+        # Build a mapping from outer-axis value tuple to multi-index
+        from itertools import product as _product
+        outer_val_to_idx = {}
+        for multi_idx in _product(*(range(len(u)) for u in outer_unique_vals)):
+            key = tuple(float(outer_unique_vals[d][i]) for d, i in enumerate(multi_idx))
+            outer_val_to_idx[key] = multi_idx
+
+        n_h_total_col = np.asarray(table["N_H_total"], dtype=float)
+
+        # Pre-extract ion data columns
+        ion_data = {ion: np.asarray(table[ion], dtype=float) for ion in ion_order}
+
+        # Group rows by outer axes and resample
+        outer_col_data = [np.asarray(table[col], dtype=float) for col in outer_axes]
+
+        # Build group keys for every row
+        row_keys = np.column_stack(outer_col_data) if outer_col_data else np.zeros((len(table), 0))
+
+        # Use structured grouping
+        unique_keys_set: Dict[tuple, List[int]] = {}
+        for row_i in range(len(table)):
+            key = tuple(float(row_keys[row_i, d]) for d in range(len(outer_axes)))
+            unique_keys_set.setdefault(key, []).append(row_i)
+
+        for key, row_indices in unique_keys_set.items():
+            multi_idx = outer_val_to_idx.get(key)
+            if multi_idx is None:
+                continue
+
+            idx_arr = np.array(row_indices)
+            group_log_t = log_temp[idx_arr]
+            group_n_h_total = n_h_total_col[idx_arr]
+
+            # Sort by ascending log_T for np.interp
+            sort_order = np.argsort(group_log_t)
+            group_log_t = group_log_t[sort_order]
+            group_n_h_total = group_n_h_total[sort_order]
+            idx_arr_sorted = idx_arr[sort_order]
+
+            # Remove duplicates / non-finite
+            valid = np.isfinite(group_log_t) & (group_n_h_total > 0)
+            if not np.any(valid):
+                continue
+            group_log_t = group_log_t[valid]
+            group_n_h_total = group_n_h_total[valid]
+            idx_arr_sorted = idx_arr_sorted[valid]
+
+            # Remove duplicate temperatures (keep last = most evolved)
+            _, unique_idx = np.unique(group_log_t, return_index=True)
+            group_log_t = group_log_t[unique_idx]
+            group_n_h_total = group_n_h_total[unique_idx]
+            idx_arr_sorted = idx_arr_sorted[unique_idx]
+
+            for ion_i, ion in enumerate(ion_order):
+                raw_ion = ion_data[ion][idx_arr_sorted]
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    log_frac = np.log10(raw_ion) - np.log10(group_n_h_total)
+
+                # Mask non-finite fractions
+                frac_valid = np.isfinite(log_frac)
+                if not np.any(frac_valid):
+                    continue
+
+                xp = group_log_t[frac_valid]
+                fp = log_frac[frac_valid]
+
+                if len(xp) < 2:
+                    # Single point — fill only the nearest T bin
+                    nearest = np.argmin(np.abs(t_axis - xp[0]))
+                    cube[multi_idx + (nearest, ion_i)] = fp[0]
+                else:
+                    resampled = np.interp(t_axis, xp, fp, left=np.nan, right=np.nan)
+                    cube[multi_idx + (slice(None), ion_i)] = resampled
+
+        # Combine outer axes + T into the full axis list
+        all_axes = list(outer_unique_vals) + [t_axis]
+        all_axis_names = list(outer_axes) + ["T"]
+
+        # Drop degenerate axes (length 1)
+        valid_dims = [i for i, ax in enumerate(all_axes) if len(ax) > 1]
+        new_points = tuple(all_axes[i] for i in valid_dims)
+        new_axis_names = tuple(all_axis_names[i] for i in valid_dims)
+
+        # Reshape values: collapse degenerate dims, keep ion dim
+        keep_shape = tuple(len(all_axes[i]) for i in valid_dims) + (len(ion_order),)
+        values = cube.reshape(keep_shape)
+
+        dropped = [all_axis_names[i] for i, ax in enumerate(all_axes) if len(ax) == 1]
+        if dropped:
+            logger.info("CloudyGridInterpolator.from_td_table: Dropped degenerate axes %s", dropped)
+        logger.info(
+            "Built TD grid interpolator: axes=%s, shape=%s, ions=%d",
+            new_axis_names, tuple(len(p) for p in new_points), len(ion_order),
+        )
+        return cls(new_points, values, ion_order, axis_names=new_axis_names, is_td_grid=True)
+
+    @classmethod
+    def from_td_table_path(
+        cls,
+        path: ArrayLike,
+        ion_columns: Optional[Sequence[str]] = None,
+        temperature_step: float = 0.05,
+    ) -> "CloudyGridInterpolator":
+        table = Table.read(path)
+        return cls.from_td_table(table, ion_columns=ion_columns, temperature_step=temperature_step)
 
     def evaluate(self, params: Mapping[str, float]) -> Dict[str, float]:
         ordered = []
@@ -759,6 +930,11 @@ class FitterConfig:
     # relative-abundance key.  The ``_0``, ``_1``, etc. suffixes refer to
     # the component index as it appears in ``component_ids``.
     cross_component_constraints: Optional[List[str]] = None
+
+    # TD grid inference: log10 N_H bounds when N_H is a free MCMC parameter.
+    # Used when the grid is a time-dependent grid (is_td_grid=True) that does
+    # not have N_H as an axis.  When None, defaults to (17.0, 23.0).
+    td_n_h_bounds: Optional[Tuple[float, float]] = None
 
     def normalised_relative_abundances(self) -> Tuple[Dict[str, Tuple[float, float]], Dict[str, float]]:
         bounds = {key: tuple(value) for key, value in self.relative_abundance_bounds.items()}
@@ -2177,6 +2353,18 @@ class JointCloudyComponentFitter:
         self.relative_ratio_to_ions = self._per_comp_ratio_to_ions[0]
         self.relative_abundance_fixed = self._per_comp_abundance_fixed[0]
 
+        # TD grid detection (per component)
+        self._td_grid_flags: List[bool] = [
+            getattr(grid, "is_td_grid", False) for grid in self.grids
+        ]
+        if any(self._td_grid_flags):
+            logger.info(
+                "TD grids detected for components: %s",
+                [self.component_ids[i] for i, f in enumerate(self._td_grid_flags) if f],
+            )
+
+        _DEFAULT_TD_NH_BOUNDS = (17.0, 23.0)
+
         # Build per-component temperature mode (auto-detect from grid axes)
         self._per_comp_temperature_mode: List[str] = []
         for i, grid in enumerate(self.grids):
@@ -2186,7 +2374,9 @@ class JointCloudyComponentFitter:
                 mode = "auto"
 
             if mode == "auto":
-                if "T" in grid.parameter_bounds():
+                if self._td_grid_flags[i]:
+                    mode = "free" if "T" in grid.parameter_bounds() else config.temperature_mode
+                elif "T" in grid.parameter_bounds():
                     mode = "free"
                 else:
                     mode = config.temperature_mode
@@ -2206,13 +2396,22 @@ class JointCloudyComponentFitter:
         start = 0
         for i, grid in enumerate(self.grids):
             bounds = grid.parameter_bounds()
+            is_td = self._td_grid_flags[i]
             p_order = ["Z", "n_H"]
+
             if "N_H" in bounds:
                 p_order.append("N_H")
             elif "NHI" in bounds:
                 p_order.append("NHI")
-            
-            if self._per_comp_temperature_mode[i] == "free":
+            elif is_td:
+                p_order.append("N_H")
+
+            if is_td:
+                if "T_init" in bounds:
+                    p_order.append("T_init")
+                if "T" in bounds:
+                    p_order.append("T")
+            elif self._per_comp_temperature_mode[i] == "free":
                 p_order.append("T")
             
             # Add Relative Abundances (Free Params) -- per-component keys
@@ -2240,6 +2439,11 @@ class JointCloudyComponentFitter:
                     kin_lo, kin_hi = float(np.min(kin_data)), float(np.max(kin_data))
                     margin = max(0.1 * (kin_hi - kin_lo), 1.0)
                     self.param_bounds.append((kin_lo - margin, kin_hi + margin))
+                elif is_td and p == "N_H" and "N_H" not in bounds:
+                    self.param_bounds.append(
+                        config.td_n_h_bounds if config.td_n_h_bounds is not None
+                        else _DEFAULT_TD_NH_BOUNDS
+                    )
                 else:
                     self.param_bounds.append(bounds[p])
                 self.param_names.append(f"{p}_{self.component_ids[i]}")
@@ -2653,6 +2857,16 @@ class JointCloudyComponentFitter:
             
             # Apply Abundance Offsets (per-component maps)
             self._apply_abundance_offsets_for_component(i, model, params)
+
+            # TD grids: scale ion fractions by N_H and inject T_cloudy
+            if self._td_grid_flags[i]:
+                n_h_scale = params.get("N_H", 0.0)
+                for _ion_key in list(model.keys()):
+                    if _ion_key.startswith("N_"):
+                        model[_ion_key] += n_h_scale
+                t_current = params.get("T")
+                if t_current is not None:
+                    model["T_cloudy"] = t_current
 
             # Fill KDE vector
             # The KDE expects predicted log column densities for specific component-ions

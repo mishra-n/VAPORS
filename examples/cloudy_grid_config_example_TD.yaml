@@ -1,0 +1,69 @@
+# Example configuration for time-dependent (PINe isochoric) Cloudy grid
+#
+# Usage:
+#   python cloudy_grid_runner.py cloudy_grid_config_example_TD.yaml
+#   python cloudy_grid_assembler.py cloudy_grid_config_example_TD.yaml
+
+mode: td
+
+uvb_table: HM12
+uvb_reference_redshift: 0.5717
+cloudy_command: /home/mishran/cloudy/c22.02/source/cloudy.exe
+max_workers: 63
+worker_startup_delay: 0.5
+
+# TD-specific settings
+td_n_timesteps: 300
+td_t_floor_kelvin: 10000
+td_stop_age_years: 4.4e17   # ~14 Gyr (Hubble time safety guard)
+
+output:
+  base_dir: /data/mishran/cloudy_outputs
+  grid_name: J2135_TD_example
+  input_subdir: input_files
+  output_subdir: output_files
+  dat_name: full_td_grid.dat
+
+grid:
+  z:
+    start: 0.5717
+    stop: 0.5717
+    step: 0.025
+  Z:
+    start: -3.0
+    stop: 1.2
+    step: 0.3
+  n_H:
+    start: -6
+    stop: -2
+    step: 0.5
+  T_init:
+    start: 5.0
+    stop: 6.5
+    step: 0.5
+  stop_label: NH
+
+assembler:
+  log_columns: false
+  ions:
+    - N_HI
+    - N_H_total
+    - N_CII
+    - N_CIII
+    - N_CIV
+    - N_OII
+    - N_OIII
+    - N_OIV
+    - N_OVI
+    - N_SiII
+    - N_SiIII
+    - N_SiIV
+    - N_SII
+    - N_SIII
+    - N_SIV
+    - N_SV
+    - N_NII
+    - N_NIII
+    - N_NIV
+    - N_NeVIII
+  overwrite: true

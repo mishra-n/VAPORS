@@ -130,6 +130,7 @@ def _coerce_sequence(entry: Any, name: str) -> Sequence[float]:
 
 def build_definition_from_config(config: Mapping[str, Any]) -> CloudyGridDefinition:
     grid_cfg = config.get("grid", config)
+    mode = str(config.get("mode", "pie"))
 
     def _get(key: str, aliases: Tuple[str, ...]) -> Any:
         if key in grid_cfg:
@@ -142,12 +143,22 @@ def build_definition_from_config(config: Mapping[str, Any]) -> CloudyGridDefinit
     redshift_vals = _coerce_sequence(_get("z", ("redshift", "redshifts", "z_range")), "redshift")
     metallicity_vals = _coerce_sequence(_get("Z", ("metallicity", "Z_range")), "metallicity")
     density_vals = _coerce_sequence(_get("n_H", ("density", "n_H_range")), "n_H")
-    column_vals = _coerce_sequence(_get("N_H", ("NHI", "column", "N_H_range", "stop")), "N_H")
+
+    if mode == "td":
+        column_vals: Sequence[float] = [0.0]
+    else:
+        column_vals = _coerce_sequence(_get("N_H", ("NHI", "column", "N_H_range", "stop")), "N_H")
 
     temperature_vals: Optional[Sequence[float]] = None
     for key in ("T", "temperature", "T_range", "temperatures"):
         if key in grid_cfg:
             temperature_vals = _coerce_sequence(grid_cfg[key], "T")
+            break
+
+    t_init_vals: Optional[Sequence[float]] = None
+    for key in ("T_init", "t_init", "T_init_range"):
+        if key in grid_cfg:
+            t_init_vals = _coerce_sequence(grid_cfg[key], "T_init")
             break
 
     stop_label = str(config.get("stop_label", grid_cfg.get("stop_label", "NHI")))
@@ -159,6 +170,7 @@ def build_definition_from_config(config: Mapping[str, Any]) -> CloudyGridDefinit
         stopping_columns=column_vals,
         temperatures=temperature_vals,
         stop_label=stop_label,
+        t_init_values=t_init_vals,
     )
 
 
@@ -216,6 +228,10 @@ def build_run_config_from_config(config: Mapping[str, Any]) -> CloudyRunConfig:
         "max_workers": config.get("max_workers", 1),
         "worker_startup_delay": config.get("worker_startup_delay", 0.0),
         "include_heating_cooling": config.get("include_heating_cooling", False),
+        "mode": config.get("mode", "pie"),
+        "td_n_timesteps": int(config.get("td_n_timesteps", 300)),
+        "td_t_floor_kelvin": float(config.get("td_t_floor_kelvin", 1e4)),
+        "td_stop_age_years": float(config.get("td_stop_age_years", 4.4e17)),
     }
     if "cloudy_command" in config:
         run_kwargs["cloudy_command"] = config["cloudy_command"]
@@ -232,20 +248,35 @@ class CloudyGridDefinition:
     stopping_columns: Sequence[float]
     temperatures: Optional[Sequence[float]] = None
     stop_label: str = "NHI"
+    t_init_values: Optional[Sequence[float]] = None
 
-    def iter_points(self) -> Iterator[Mapping[str, float]]:
-        for combo in itertools.product(
-            self.redshifts,
-            self.metallicities,
-            self.hydrogen_densities,
-            self.stopping_columns,
-            self.temperatures if self.temperatures is not None else [None],
-        ):
-            z, Z, n_H, stop, temp = combo
-            params = {"z": float(z), "Z": float(Z), "n_H": float(n_H), self.stop_label: float(stop)}
-            if temp is not None:
-                params["T"] = float(temp)
-            yield params
+    def iter_points(self, *, mode: str = "pie") -> Iterator[Mapping[str, float]]:
+        if mode == "td":
+            t_inits = self.t_init_values if self.t_init_values is not None else [None]
+            for combo in itertools.product(
+                self.redshifts,
+                self.metallicities,
+                self.hydrogen_densities,
+                t_inits,
+            ):
+                z, Z, n_H, t_init = combo
+                params: dict[str, float] = {"z": float(z), "Z": float(Z), "n_H": float(n_H)}
+                if t_init is not None:
+                    params["T_init"] = float(t_init)
+                yield params
+        else:
+            for combo in itertools.product(
+                self.redshifts,
+                self.metallicities,
+                self.hydrogen_densities,
+                self.stopping_columns,
+                self.temperatures if self.temperatures is not None else [None],
+            ):
+                z, Z, n_H, stop, temp = combo
+                params = {"z": float(z), "Z": float(Z), "n_H": float(n_H), self.stop_label: float(stop)}
+                if temp is not None:
+                    params["T"] = float(temp)
+                yield params
 
 
 @dataclasses.dataclass
@@ -266,11 +297,17 @@ class CloudyRunConfig:
     max_workers: int = 1
     worker_startup_delay: float = 0.0
     include_heating_cooling: bool = False
+    mode: str = "pie"  # accepted: pie, td
+    td_n_timesteps: int = 300
+    td_t_floor_kelvin: float = 1e4
+    td_stop_age_years: float = 4.4e17  # ~14 Gyr (Hubble time safety guard)
 
     def __post_init__(self) -> None:
         self.input_dir = Path(self.input_dir)
         self.output_dir = Path(self.output_dir)
-        if self.stop_mode not in {"neutral", "total"}:
+        if self.mode not in {"pie", "td"}:
+            raise ValueError("mode must be 'pie' or 'td'")
+        if self.mode == "pie" and self.stop_mode not in {"neutral", "total"}:
             raise ValueError("stop_mode must be 'neutral' or 'total'")
         if self.max_workers < 1:
             raise ValueError("max_workers must be >= 1")
@@ -291,15 +328,19 @@ class CloudyJob:
 # -----------------------------------------------------------------------------
 
 
-def build_file_prefix(params: Mapping[str, float], stop_label: str) -> str:
+def build_file_prefix(params: Mapping[str, float], stop_label: str, *, mode: str = "pie") -> str:
     parts = [
         f"z={_format_parameter(params['z'])}",
         f"Z={_format_parameter(params['Z'])}",
         f"nh={_format_parameter(params['n_H'])}",
-        f"{stop_label}={_format_parameter(params[stop_label])}",
     ]
-    if "T" in params:
-        parts.append(f"T={_format_parameter(params['T'])}")
+    if mode == "td":
+        if "T_init" in params:
+            parts.append(f"Tinit={_format_parameter(params['T_init'])}")
+    else:
+        parts.append(f"{stop_label}={_format_parameter(params[stop_label])}")
+        if "T" in params:
+            parts.append(f"T={_format_parameter(params['T'])}")
     return "".join(parts)
 
 
@@ -344,18 +385,47 @@ def _render_cloudy_input(params: Mapping[str, float], definition: CloudyGridDefi
     return "\n".join(lines)
 
 
+def _render_cloudy_input_td(params: Mapping[str, float], definition: CloudyGridDefinition, config: CloudyRunConfig) -> str:
+    """Render a Cloudy input script for a time-dependent isochoric cooling run."""
+    prefix = build_file_prefix(params, definition.stop_label, mode="td")
+    uvb_redshift = config.uvb_reference_redshift if config.uvb_reference_redshift is not None else params["z"]
+
+    t_init_log = params.get("T_init")
+    t_init_linear = 10.0 ** t_init_log if t_init_log is not None else 1e6
+
+    lines: List[str] = ["title CGM TD"]
+    if config.include_cmb:
+        lines.append(f"cmb redshift {params['z']}")
+    lines.append(f"table {config.uvb_table} redshift {uvb_redshift}")
+    lines.append(f"metals {params['Z']} log")
+    lines.append(f"hden {params['n_H']} log")
+    lines.append(f"coronal {t_init_linear:.6e} K init time")
+    lines.append("constant density")
+    lines.append("set dr 0")
+    lines.append(f"stop time when temperature falls below {config.td_t_floor_kelvin:.0f} K")
+    lines.append("set trim -20")
+    lines.append(f"save species column density \"{prefix}.col\" all no hash")
+    lines.append(f"save time dependent \"{prefix}.tim\" no hash")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def generate_input_files(definition: CloudyGridDefinition, config: CloudyRunConfig) -> List[CloudyJob]:
     config.input_dir.mkdir(parents=True, exist_ok=True)
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
+    is_td = config.mode == "td"
     jobs: List[CloudyJob] = []
-    for params in definition.iter_points():
-        prefix = build_file_prefix(params, definition.stop_label)
+    for params in definition.iter_points(mode=config.mode):
+        prefix = build_file_prefix(params, definition.stop_label, mode=config.mode)
         input_path = config.input_dir / f"{prefix}.in"
         output_path = config.output_dir / f"{prefix}.out"
         column_path = config.output_dir / f"{prefix}.col"
         if config.overwrite_inputs or not input_path.exists():
-            text = _render_cloudy_input(params, definition, config)
+            if is_td:
+                text = _render_cloudy_input_td(params, definition, config)
+            else:
+                text = _render_cloudy_input(params, definition, config)
             input_path.write_text(text)
         jobs.append(CloudyJob(prefix=prefix, input_file=input_path, output_file=output_path, expected_columns_file=column_path))
     logger.info("Prepared %s Cloudy input files in %s", len(jobs), config.input_dir)
@@ -469,12 +539,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     else:
         run_cloudy_grid(jobs, run_config, skip_completed=not args.rerun_all)
 
-    logger.info("Configured grid definition: z=%s, Z=%s, n_H=%s, %s=%s",
-                definition.redshifts,
-                definition.metallicities,
-                definition.hydrogen_densities,
-                definition.stop_label,
-                definition.stopping_columns)
+    if run_config.mode == "td":
+        logger.info("Configured TD grid definition: z=%s, Z=%s, n_H=%s, T_init=%s",
+                    definition.redshifts,
+                    definition.metallicities,
+                    definition.hydrogen_densities,
+                    definition.t_init_values)
+    else:
+        logger.info("Configured grid definition: z=%s, Z=%s, n_H=%s, %s=%s",
+                    definition.redshifts,
+                    definition.metallicities,
+                    definition.hydrogen_densities,
+                    definition.stop_label,
+                    definition.stopping_columns)
     logger.info("Once Cloudy runs finish, assemble the grid via: python cloudy_grid_assembler.py %s", config_path)
     logger.info("Planned .dat output: %s", dat_path)
     return 0

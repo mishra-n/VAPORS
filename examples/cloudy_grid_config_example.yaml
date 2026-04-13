@@ -1,0 +1,64 @@
+# Example configuration for cloudy_grid_runner.py and cloudy_grid_assembler.py
+
+uvb_table: HM12
+uvb_reference_redshift: 0.5717
+cloudy_command: /home/mishran/cloudy/c22.02/source/cloudy.exe
+stop_mode: total
+max_workers: 63
+worker_startup_delay: 0.5
+include_average_file: true
+include_heating_cooling: true
+
+output:
+  base_dir: /data/mishran/cloudy_outputs
+  grid_name: J2135_example
+  input_subdir: input_files
+  output_subdir: output_files
+  dat_name: full_grid.dat
+
+grid:
+  z:
+    start: 0.5717
+    stop: 0.5717
+    step: 0.025
+  Z:
+    start: -4.1
+    stop: 1.2
+    step: 0.3
+  n_H:
+    start: -8
+    stop: -2
+    step: 0.25
+  N_H:
+    start: 15.0    
+    stop: 25.0
+    step: 0.5
+  # T:
+  #   values: [4.0, 4.25, 4.5, 4.75, 5.0, 5.25, 5.5, 5.75, 6.0]
+  stop_label: NH
+
+assembler:
+  include_temperature: True
+  log_columns: false
+  include_heating_cooling: true
+  ions:
+    - N_HI
+    - N_CII
+    - N_CIII
+    - N_CIV
+    - N_OII
+    - N_OIII
+    - N_OIV
+    - N_OVI
+    - N_SiII
+    - N_SiIII
+    - N_SiIV
+    - N_SII
+    - N_SIII
+    - N_SIV
+    - N_SV
+    - N_NII
+    - N_NIII
+    - N_NIV
+    - N_NeVIII
+  overwrite: true

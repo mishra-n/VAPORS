@@ -63,6 +63,10 @@ class RunnerOptions:
     worker_startup_delay: float = 0.0
     max_workers: int = 1
     include_heating_cooling: bool = False
+    mode: str = "pie"
+    td_n_timesteps: int = 300
+    td_t_floor_kelvin: float = 1e4
+    td_stop_age_years: float = 4.4e17
 
 
 @dataclasses.dataclass
@@ -108,6 +112,10 @@ def _load_runner_options(data: Mapping[str, Any]) -> RunnerOptions:
         worker_startup_delay=float(data.get("worker_startup_delay", 0.0)),
         max_workers=int(data.get("max_workers", 1)),
         include_heating_cooling=bool(data.get("include_heating_cooling", False)),
+        mode=str(data.get("mode", "pie")),
+        td_n_timesteps=int(data.get("td_n_timesteps", 300)),
+        td_t_floor_kelvin=float(data.get("td_t_floor_kelvin", 1e4)),
+        td_stop_age_years=float(data.get("td_stop_age_years", 4.4e17)),
     )
 
 
@@ -129,11 +137,16 @@ def load_cloudy_config(path: Path | str) -> CloudyPipelineConfig:
 
     grid_data = data.get("grid", {})
     stop_label = grid_data.get("stop_label", "N_H")
+    mode = str(data.get("mode", data.get("runner", {}).get("mode", "pie")))
 
     redshift_axis = _parse_axis_block("z", grid_data["z"])
     metallicity_axis = _parse_axis_block("Z", grid_data["Z"])
     density_axis = _parse_axis_block("n_H", grid_data["n_H"])
-    stop_axis = _parse_axis_block(stop_label, grid_data[stop_label])
+
+    if mode == "td":
+        stop_axis = AxisConfig(name=stop_label, values=[0.0])
+    else:
+        stop_axis = _parse_axis_block(stop_label, grid_data[stop_label])
 
     temp_axis = None
     if "T" in grid_data:
@@ -142,6 +155,10 @@ def load_cloudy_config(path: Path | str) -> CloudyPipelineConfig:
         if enabled:
             temp_axis = _parse_axis_block("T", temp_block)
 
+    t_init_axis = None
+    if "T_init" in grid_data:
+        t_init_axis = _parse_axis_block("T_init", grid_data["T_init"])
+
     definition = CloudyGridDefinition(
         redshifts=np.asarray(redshift_axis.values, dtype=float),
         metallicities=np.asarray(metallicity_axis.values, dtype=float),
@@ -149,6 +166,7 @@ def load_cloudy_config(path: Path | str) -> CloudyPipelineConfig:
         stopping_columns=np.asarray(stop_axis.values, dtype=float),
         temperatures=None if temp_axis is None else np.asarray(temp_axis.values, dtype=float),
         stop_label=stop_label,
+        t_init_values=None if t_init_axis is None else np.asarray(t_init_axis.values, dtype=float),
     )
 
     paths = _load_paths(data.get("paths", {}))
@@ -172,6 +190,7 @@ def build_assembly_config(config: CloudyPipelineConfig) -> GridAssemblyConfig:
         log_columns=options.log_columns,
         stop_alias_overrides=options.stop_alias_overrides,
         include_heating_cooling=options.include_heating_cooling,
+        mode=config.runner.mode,
     )
 
 

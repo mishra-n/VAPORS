@@ -96,6 +96,8 @@ def _read_cloudy_average_temperature(avr_path: Path) -> Optional[float]:
     return None
 
 
+from typing import List as _List
+
 from cloudy_grid_runner import (
     CloudyGridDefinition,
     build_definition_from_config,
@@ -104,6 +106,81 @@ from cloudy_grid_runner import (
     load_config,
     resolve_output_paths,
 )
+
+
+# ---------------------------------------------------------------------------
+# Time-dependent output file parsers
+# ---------------------------------------------------------------------------
+
+TIM_COLUMNS = (
+    "time_elapsed", "timestep", "continuum_scale", "density",
+    "T_mean", "H+", "H0", "H2", "He+", "CO_H", "z_current", "ne_nH",
+)
+
+
+def _read_td_tim_file(tim_path: Path) -> _List[Dict[str, float]]:
+    """Parse a Cloudy ``save time dependent`` ``.tim`` file.
+
+    Returns one dict per time-step with keys from :data:`TIM_COLUMNS`.
+    """
+    rows: _List[Dict[str, float]] = []
+    with tim_path.open("r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            tokens = line.replace("\t", " ").split()
+            if len(tokens) < len(TIM_COLUMNS):
+                continue
+            try:
+                vals = [float(t) for t in tokens[: len(TIM_COLUMNS)]]
+            except ValueError:
+                continue
+            rows.append(dict(zip(TIM_COLUMNS, vals)))
+    return rows
+
+
+def _read_td_col_file(
+    col_path: Path,
+) -> Tuple[_List[str], _List[_List[float]]]:
+    """Parse a multi-row Cloudy ``.col`` file (written without ``last``).
+
+    Returns ``(header_names, data_rows)`` where each element of
+    *data_rows* is a list of floats aligned with *header_names*.
+    """
+    header_names: Optional[_List[str]] = None
+    data_rows: _List[_List[float]] = []
+
+    with col_path.open("r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith("#"):
+                candidate = line.lstrip("#").strip()
+                if candidate:
+                    header_names = candidate.replace("\t", " ").split()
+                continue
+            tokens = line.replace("\t", " ").split()
+            try:
+                vals = [float(t) for t in tokens]
+            except ValueError:
+                continue
+            data_rows.append(vals)
+
+    if header_names is None:
+        raise ValueError(f"No header line found in {col_path}")
+
+    # Merge "column density X" prefix if present
+    if (
+        len(header_names) >= 3
+        and header_names[0].lower() == "column"
+        and header_names[1].lower() == "density"
+    ):
+        merged = " ".join(header_names[:3])
+        header_names = [merged] + header_names[3:]
+
+    return header_names, data_rows
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +290,7 @@ class GridAssemblyConfig:
     stop_alias_overrides: Mapping[str, str] | None = None
     overwrite: bool = True
     include_heating_cooling: bool = False
+    mode: str = "pie"  # "pie" or "td"
 
     def __post_init__(self) -> None:
         self.output_path = Path(self.output_path)
@@ -370,6 +448,141 @@ def assemble_cloudy_table(
     return table
 
 
+def assemble_cloudy_td_table(
+    definition: CloudyGridDefinition,
+    output_dir: Path | str,
+    *,
+    ions: Optional[Sequence[str]] = None,
+    config: Optional[GridAssemblyConfig] = None,
+) -> QTable:
+    """Read Cloudy TD ``.col`` / ``.tim`` outputs and build a time-series ``QTable``.
+
+    Each grid point produces *multiple* rows (one per time-step).  The table
+    columns are ``z, Z, n_H, T_init, time_elapsed, temperature, [ion cols]``.
+    Ion columns store **raw single-zone column densities** (linear, cm^-2) as
+    output by Cloudy.  Downstream inference (``CloudyGridInterpolator.from_td_table``)
+    converts these to ion fractions (``N_ion / N_H_total``) and resamples onto a
+    regular temperature grid.
+    """
+
+    output_dir = Path(output_dir)
+    if config is None:
+        config = GridAssemblyConfig(output_path=output_dir / "full_td_grid.dat", mode="td")
+
+    alias_map: Dict[str, str] = dict(DEFAULT_ION_ALIASES)
+    if config.ion_aliases:
+        alias_map.update(config.ion_aliases)
+
+    if ions is None:
+        ions = [k for k in alias_map.keys()]
+    else:
+        ions = list(ions)
+
+    for required in ("N_HI", "N_H_total"):
+        if required not in ions:
+            ions.append(required)
+
+    col_names: list[str] = ["z", "Z", "n_H", "T_init", "time_elapsed", "temperature"]
+    col_names.extend(ions)
+    table = QTable(names=col_names)
+
+    n_grid = 0
+    n_steps_total = 0
+    for params in definition.iter_points(mode="td"):
+        prefix = build_file_prefix(params, definition.stop_label, mode="td")
+        col_path = output_dir / f"{prefix}.col"
+        tim_path = output_dir / f"{prefix}.tim"
+        if not col_path.exists():
+            raise FileNotFoundError(f"Missing TD .col file: {col_path}")
+        if not tim_path.exists():
+            raise FileNotFoundError(f"Missing TD .tim file: {tim_path}")
+
+        header, data_rows = _read_td_col_file(col_path)
+        tim_rows = _read_td_tim_file(tim_path)
+
+        n_steps = min(len(data_rows), len(tim_rows))
+        if n_steps == 0:
+            logger.warning("No data rows in %s / %s – skipping", col_path, tim_path)
+            continue
+
+        header_map = {name: idx for idx, name in enumerate(header)}
+
+        z_val = params["z"]
+        Z_val = params["Z"]
+        n_H_val = params["n_H"]
+        t_init_val = params.get("T_init", float("nan"))
+
+        # Resolve total-H alias once
+        total_h_alias = alias_map.get("N_H_total", STOP_ALIAS_TOTAL)
+        total_h_idx = header_map.get(total_h_alias)
+        # Fallback: try "H+" + neutral
+        neutral_h_alias = alias_map.get("N_HI", STOP_ALIAS_NEUTRAL)
+        neutral_h_idx = header_map.get(neutral_h_alias)
+        h_plus_idx = header_map.get("H+")
+
+        for step_i in range(n_steps):
+            drow = data_rows[step_i]
+            trow = tim_rows[step_i]
+
+            time_elapsed = trow["time_elapsed"]
+            temperature = trow["T_mean"]
+
+            # Determine N_H_total for this time-step
+            if total_h_idx is not None and total_h_idx < len(drow):
+                n_h_total = drow[total_h_idx]
+            else:
+                n_neutral = drow[neutral_h_idx] if (neutral_h_idx is not None and neutral_h_idx < len(drow)) else 0.0
+                n_ionised = drow[h_plus_idx] if (h_plus_idx is not None and h_plus_idx < len(drow)) else 0.0
+                n_h_total = n_neutral + n_ionised
+
+            row = [z_val, Z_val, n_H_val, t_init_val, time_elapsed, temperature]
+
+            for ion in ions:
+                alias = alias_map.get(ion)
+                if ion == "N_H_total":
+                    value = n_h_total
+                elif alias is not None and alias in header_map:
+                    col_idx = header_map[alias]
+                    value = drow[col_idx] if col_idx < len(drow) else float("nan")
+                else:
+                    value = float("nan")
+
+                if config.log_columns:
+                    value = _safe_log10(value)
+                row.append(value)
+
+            table.add_row(row)
+            n_steps_total += 1
+        n_grid += 1
+
+    logger.info(
+        "Assembled TD grid: %d grid points, %d total time-step rows",
+        n_grid, n_steps_total,
+    )
+    return table
+
+
+def write_td_grid(table: QTable, definition: CloudyGridDefinition, config: GridAssemblyConfig) -> Path:
+    """Write the assembled TD table to disk and return the output path."""
+
+    output_path = config.output_path
+    if output_path.suffix not in {".dat", ".txt"}:
+        z_range = _range_label(definition.redshifts)
+        Z_range = _range_label(definition.metallicities)
+        nH_range = _range_label(definition.hydrogen_densities)
+        t_init_range = _range_label(definition.t_init_values) if definition.t_init_values else "none"
+        output_path = output_path / (
+            f"full_td__z={z_range}__Z={Z_range}__nh={nH_range}__Tinit={t_init_range}.dat"
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists() and not config.overwrite:
+        raise FileExistsError(f"Refusing to overwrite existing file: {output_path}")
+    ascii.write(table, output_path, overwrite=True)
+    logger.info("Wrote TD grid table with %s rows to %s", len(table), output_path)
+    return output_path
+
+
 def _range_label(values: Iterable[float]) -> str:
     arr = np.asarray(list(values), dtype=float)
     return f"{_format_parameter(arr.min())}_{_format_parameter(arr.max())}"
@@ -426,34 +639,48 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         raise FileNotFoundError(f"Cloudy output directory does not exist: {output_dir}")
 
     assembler_cfg: Mapping[str, Any] = config_data.get("assembler", {}) or {}
+    mode = str(config_data.get("mode", "pie"))
 
     ions = assembler_cfg.get("ions")
     if ions is not None:
         ions = [str(ion) for ion in ions]
 
-    include_temperature = assembler_cfg.get(
-        "include_temperature",
-        definition.temperatures is not None,
-    )
     log_columns = assembler_cfg.get("log_columns", False)
     ion_aliases = assembler_cfg.get("ion_aliases")
-    stop_alias_overrides = assembler_cfg.get("stop_alias_overrides")
     overwrite = assembler_cfg.get("overwrite", True)
-    include_heating_cooling = assembler_cfg.get("include_heating_cooling", False)
 
-    assembly_config = GridAssemblyConfig(
-        output_path=dat_path,
-        ion_aliases=ion_aliases,
-        include_temperature=include_temperature,
-        log_columns=log_columns,
-        stop_alias_overrides=stop_alias_overrides,
-        overwrite=overwrite,
-        include_heating_cooling=include_heating_cooling,
-    )
+    if mode == "td":
+        assembly_config = GridAssemblyConfig(
+            output_path=dat_path,
+            ion_aliases=ion_aliases,
+            log_columns=log_columns,
+            overwrite=overwrite,
+            mode="td",
+        )
+        logger.info("Assembling TD Cloudy outputs from %s", output_dir)
+        table = assemble_cloudy_td_table(definition, output_dir, ions=ions, config=assembly_config)
+        final_path = write_td_grid(table, definition, assembly_config)
+    else:
+        include_temperature = assembler_cfg.get(
+            "include_temperature",
+            definition.temperatures is not None,
+        )
+        stop_alias_overrides = assembler_cfg.get("stop_alias_overrides")
+        include_heating_cooling = assembler_cfg.get("include_heating_cooling", False)
 
-    logger.info("Assembling Cloudy outputs from %s", output_dir)
-    table = assemble_cloudy_table(definition, output_dir, ions=ions, config=assembly_config)
-    final_path = write_full_grid(table, definition, assembly_config)
+        assembly_config = GridAssemblyConfig(
+            output_path=dat_path,
+            ion_aliases=ion_aliases,
+            include_temperature=include_temperature,
+            log_columns=log_columns,
+            stop_alias_overrides=stop_alias_overrides,
+            overwrite=overwrite,
+            include_heating_cooling=include_heating_cooling,
+        )
+        logger.info("Assembling Cloudy outputs from %s", output_dir)
+        table = assemble_cloudy_table(definition, output_dir, ions=ions, config=assembly_config)
+        final_path = write_full_grid(table, definition, assembly_config)
+
     logger.info("Wrote assembled grid to %s", final_path)
     return 0
 
@@ -466,7 +693,9 @@ __all__ = [
     "DEFAULT_ION_ALIASES",
     "GridAssemblyConfig",
     "assemble_cloudy_table",
+    "assemble_cloudy_td_table",
     "write_full_grid",
+    "write_td_grid",
     "custom_arange",
     "main",
 ]
