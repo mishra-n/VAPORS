@@ -1,19 +1,100 @@
 from header import *  # Importing necessary dependencies
 
-def find_nearest_index(array, number):
+def find_nearest_index(array, number, tolerance=0.0):
     """
-    Find the index of the nearest value in an array to a given number.
+    Find the index of the nearest value in an array to a given number,
+    ignoring values within the specified tolerance.
 
     Parameters:
     - array (numpy.ndarray): The input array.
     - number (float): The number to which we want to find the nearest value.
+    - tolerance (float): Minimum absolute difference to consider (default 0.0).
 
     Returns:
-    - nearest_index (int): The index of the nearest value in the array.
+    - nearest_index (int or None): The index of the nearest value in the array, or None if none found.
     """
-    absolute_diff = np.abs(array - number)  # Calculate absolute differences
-    nearest_index = np.argmin(absolute_diff)  # Find the index of the minimum absolute difference
+    absolute_diff = np.abs(array - number)
+    mask = absolute_diff > tolerance
+    if not np.any(mask):
+        return None
+    nearest_index = np.argmin(np.where(mask, absolute_diff, np.inf))
     return nearest_index
+
+def find_nearest_index_above(array, number, tolerance=0.0):
+    """
+    Find the index of the nearest value in an array that is greater than a given number
+    by at least the specified tolerance.
+
+    Parameters:
+    - array (numpy.ndarray): The input array.
+    - number (float): The number to which we want to find the nearest value.
+    - tolerance (float): Minimum difference above the number (default 0.0).
+
+    Returns:
+    - nearest_index (int or None): The index of the nearest value in the array that is greater than the number.
+    """
+    indices_above = np.where(array > number + tolerance)[0]
+    if len(indices_above) == 0:
+        return None
+    nearest_index = indices_above[np.argmin(np.abs(array[indices_above] - number))]
+    return nearest_index
+
+def find_nearest_index_below(array, number, tolerance=0.0):
+    """
+    Find the index of the nearest value in an array that is less than a given number
+    by at least the specified tolerance.
+
+    Parameters:
+    - array (numpy.ndarray): The input array.
+    - number (float): The number to which we want to find the nearest value.
+    - tolerance (float): Minimum difference below the number (default 0.0).
+
+    Returns:
+    - nearest_index (int or None): The index of the nearest value in the array that is less than the number.
+    """
+    indices_below = np.where(array < number - tolerance)[0]
+    if len(indices_below) == 0:
+        return None
+    nearest_index = indices_below[np.argmin(np.abs(array[indices_below] - number))]
+    return nearest_index
+
+def find_nearest_value_above(array, number, tolerance=0.0):
+    """
+    Find the nearest value in an array that is greater than a given number
+    by at least the specified tolerance.
+
+    Parameters:
+    - array (numpy.ndarray): The input array.
+    - number (float): The number to which we want to find the nearest value.
+    - tolerance (float): Minimum difference above the number (default 0.0).
+
+    Returns:
+    - nearest_value (float or None): The nearest value in the array that is greater than the number.
+    """
+    indices_above = np.where(array > number + tolerance)[0]
+    if len(indices_above) == 0:
+        return None
+    nearest_value = array[indices_above[np.argmin(np.abs(array[indices_above] - number))]]
+    return nearest_value
+
+def find_nearest_value_below(array, number, tolerance=0.0):
+    """
+    Find the nearest value in an array that is less than a given number
+    by at least the specified tolerance.
+
+    Parameters:
+    - array (numpy.ndarray): The input array.
+    - number (float): The number to which we want to find the nearest value.
+    - tolerance (float): Minimum difference below the number (default 0.0).
+
+    Returns:
+    - nearest_value (float or None): The nearest value in the array that is less than the number.
+    """
+    indices_below = np.where(array < number - tolerance)[0]
+    if len(indices_below) == 0:
+        return None
+    nearest_value = array[indices_below[np.argmin(np.abs(array[indices_below] - number))]]
+    return nearest_value
 
 def remove_close_values(arr, min_distance):
     """
@@ -176,3 +257,177 @@ def check_values_in_arrays(A, B):
 
 def ReLU(x):
     return x * (x > 0)
+
+def gen_vrange_mask(velocity_spectrum, vranges):
+    """
+    Given a velocity spectrum (astropy Quantity array in km/s) and a list
+    of vrange pairs [(vmin, vmax), ...] (each as astropy Quantity), return
+    a boolean mask selecting points inside any of the ranges.
+
+    Parameters:
+    - velocity_spectrum: astropy.units.Quantity array (e.g., km/s)
+    - vranges: list of (vmin, vmax) pairs, each a Quantity with compatible units
+
+    Returns:
+    - mask: numpy boolean array with same length as velocity_spectrum
+    """
+    mask_temp = np.zeros_like(getattr(velocity_spectrum, 'value', velocity_spectrum), dtype=bool)
+    # allow empty vranges
+    if vranges is None:
+        return mask_temp
+    for vpair in vranges:
+        if vpair is None:
+            continue
+        print(vpair)
+        vmin, vmax = vpair
+        # comparisons work with astropy quantities
+        mask_range = np.logical_and(velocity_spectrum > vmin, velocity_spectrum < vmax)
+        mask_temp = np.logical_or(mask_temp, mask_range)
+    return mask_temp
+
+
+def safe_sigma(sigma_array, floor_fraction=1e-3, min_floor=1e-8):
+    """
+    Return a sigma array with a sensible non-zero floor to avoid divide-by-zero
+    and extreme z-values when computing Gaussian tail/CDF terms.
+
+    Strategy:
+    - Compute the median of positive sigma values (if any).
+    - Set floor = max(median * floor_fraction, min_floor).
+    - Clip the input sigma_array at that floor.
+
+    Parameters:
+    - sigma_array: 1D numpy array of uncertainties (may contain zeros or negatives).
+    - floor_fraction: fraction of the median positive sigma to use as floor.
+    - min_floor: absolute minimum floor.
+
+    Returns:
+    - clipped sigma_array (numpy array)
+    """
+    s = np.array(sigma_array, copy=True)
+    # Force negative uncertainties to zero (match existing behavior elsewhere)
+    s[s < 0] = 0.0
+    positive = s[s > 0]
+    if positive.size > 0:
+        med = np.median(positive)
+    else:
+        med = min_floor
+    floor = max(med * floor_fraction, min_floor)
+    return np.clip(s, floor, None)
+
+
+def mask_for_line(spectral_axis, line_wave, z, vranges):
+    """
+    Convenience wrapper: compute velocity array for a given observed spectral
+    axis and transition (line_wave) at redshift z and return the boolean mask
+    for the provided vranges.
+
+    Parameters:
+    - spectral_axis: array-like of observed wavelengths (astropy.Quantity or plain array compatible with to_velocity)
+    - line_wave: transition rest wavelength (float or Quantity, typically in Angstrom)
+    - z: redshift (float)
+    - vranges: list of (vmin, vmax) pairs (astropy Quantities, e.g., km/s)
+
+    Returns:
+    - mask: boolean numpy array
+    """
+    velocity_spectrum = to_velocity(spectral_axis, line_wave, z).to('km/s')
+    return gen_vrange_mask(velocity_spectrum, vranges)
+
+
+def make_continuum_node_veto(model, mask_dict, param_keyword='knot_loc'):
+    """
+    Build a callable that flags continuum knot parameters entering forbidden
+    velocity windows defined in mask_dict['redshifts'][...]['continuum_node_vrange'].
+
+    Parameters
+    ----------
+    model : astropy.modeling.Model
+        The compound model whose parameter ordering matches the MCMC state.
+    mask_dict : dict
+        Mask configuration expected to contain optional continuum_node_vrange
+        entries with velocity intervals per spectral line.
+    param_keyword : str, optional
+        Substring used to identify continuum knot-location parameters.
+
+    Returns
+    -------
+    callable or None
+        Function taking a parameter vector and returning True if a violation
+        occurs. Returns None when no forbidden intervals are configured or no
+        matching parameters are present.
+    """
+
+    if mask_dict is None:
+        return None
+
+    redshift_entries = mask_dict.get('redshifts', [])
+    if not redshift_entries:
+        return None
+
+    try:
+        from astropy.constants import c as const_c
+        from astropy import units as u
+    except Exception:
+        return None
+
+    try:
+        from line_info import SEARCH_LINES
+    except Exception:
+        SEARCH_LINES = None
+
+    c_kms = const_c.to(u.km / u.s).value
+
+    knot_indices = [i for i, name in enumerate(getattr(model, 'param_names', []))
+                    if param_keyword in name]
+    if not knot_indices:
+        return None
+
+    intervals = []
+    for entry in redshift_entries:
+        z_entry = entry.get('z')
+        cont_cfg = entry.get('continuum_node_vrange')
+        if not cont_cfg or z_entry is None:
+            continue
+
+        for line_name, ranges in cont_cfg.items():
+            rest_wavelength = None
+            if SEARCH_LINES is not None:
+                rows = SEARCH_LINES[SEARCH_LINES['tempname'] == line_name]
+                if len(rows) > 0:
+                    rest_wavelength = rows['wave'][0]
+            if rest_wavelength is None:
+                continue
+
+            lambda_center = rest_wavelength * (1.0 + float(z_entry))
+            for vr in ranges:
+                if not isinstance(vr, (list, tuple)) or len(vr) != 2:
+                    continue
+                vlow, vhigh = vr
+                try:
+                    vlow = vlow.to(u.km / u.s).value if hasattr(vlow, 'to') else float(vlow)
+                    vhigh = vhigh.to(u.km / u.s).value if hasattr(vhigh, 'to') else float(vhigh)
+                except Exception:
+                    continue
+                lam_low = lambda_center * (1.0 + vlow / c_kms)
+                lam_high = lambda_center * (1.0 + vhigh / c_kms)
+                lo, hi = (min(lam_low, lam_high), max(lam_low, lam_high))
+                intervals.append((lo, hi))
+
+    if not intervals:
+        return None
+
+    intervals = np.asarray(intervals, dtype=float)
+    print(f"Continuum node veto: {len(intervals)} forbidden intervals configured.")
+    print(intervals)
+    def _violates(pars):
+        params = np.asarray(pars, dtype=float)
+        knot_values = params[knot_indices]
+        for value in knot_values:
+            if not np.isfinite(value):
+                continue
+            if np.any((value >= intervals[:, 0]) & (value <= intervals[:, 1])):
+                return True
+        return False
+
+    return _violates
